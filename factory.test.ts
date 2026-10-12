@@ -29,7 +29,10 @@ function register() {
 	return captured.tools.get("ask_user_question")!;
 }
 
-function driveCustom(script: (c: RenderableComponent, done: (v: unknown) => void) => void) {
+function driveCustom(
+	script: (c: RenderableComponent, done: (v: unknown) => void) => void,
+	options: { rows?: number } = {},
+) {
 	const requestRender = vi.fn();
 	const custom = vi.fn((factory: unknown) => {
 		return new Promise((resolve) => {
@@ -40,7 +43,7 @@ function driveCustom(script: (c: RenderableComponent, done: (v: unknown) => void
 				done: (v: unknown) => void,
 			) => RenderableComponent;
 			const component = f(
-				{ requestRender, terminal: { columns: 120, rows: 24 } },
+				{ requestRender, terminal: { columns: 120, rows: options.rows ?? 24 } },
 				identityTheme,
 				getKeybindings(),
 				resolve,
@@ -169,8 +172,8 @@ describe("ask_user_question — factory driver (real pi-tui keybindings)", () =>
 		const ctx = { hasUI: true, ui: { custom } } as never;
 		await tool.execute?.("tc", threeOptionParams as never, undefined as never, undefined as never, ctx);
 
-		// Collapse shrinks the entire dialog to one row — pi-tui sizes the overlay to
-		// `min(lines.length, maxHeight)`, so a 1-line render frees the transcript above.
+		// Collapse shrinks the entire dialog to one row — the docked dialog then
+		// occupies a single dock row, handing the freed rows back to the transcript above.
 		expect(collapsedLines).toHaveLength(1);
 		expect(collapsedLines[0]).toContain("Ctrl+] to expand");
 		expect(collapsedLines[0]).toContain("Esc to cancel");
@@ -328,6 +331,30 @@ describe("ask_user_question — tab-switch height stability", () => {
 		await tool.execute?.("tc", mixedParams as never, undefined as never, undefined as never, ctx);
 		expect(lengthTab0).toBe(lengthTab1);
 	});
+
+	// Terminal heights where the equalized dialog height overflows the row budget for
+	// one tab's natural body but not the other's: every tab must still render the same
+	// number of rows (the overflow path pads short bodies to the full budget).
+	for (const rows of [12, 17, 18, 20, 24, 30, 40]) {
+		it(`dialog total line count is identical across tab switches at ${rows} terminal rows`, async () => {
+			const tool = register();
+			const lengths: number[] = [];
+			const { custom } = driveCustom(
+				(c, done) => {
+					lengths.push(c.render(120).length);
+					c.handleInput(KEY.TAB);
+					lengths.push(c.render(120).length);
+					c.handleInput(KEY.TAB); // Submit tab
+					lengths.push(c.render(120).length);
+					done({ answers: [], cancelled: true });
+				},
+				{ rows },
+			);
+			const ctx = { hasUI: true, ui: { custom } } as never;
+			await tool.execute?.("tc", mixedParams as never, undefined as never, undefined as never, ctx);
+			expect(new Set(lengths).size).toBe(1);
+		});
+	}
 });
 
 describe("ask_user_question — multi-select flow (single question)", () => {

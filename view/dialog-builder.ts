@@ -124,7 +124,10 @@ export interface DialogConfig {
 	getBodyHeight: (width: number) => number;
 	/** Body height of the CURRENTLY active tab/option. The chrome subtracts this from `getBodyHeight` to absorb the residual OUTSIDE the bordered region. */
 	getCurrentBodyHeight: (width: number) => number;
-	/** Terminal height getter. Mirrors `getTerminalWidth` — reads `tui.terminal.rows` at render time. */
+	/**
+	 * Row budget getter, read at render time: the terminal height minus the rows the
+	 * input dock leaves to the transcript and footer (see `dialogRowBudget`).
+	 */
 	getTerminalRows: () => number;
 	/**
 	 * Resolved collapse/expand key spec (`resolveCollapseKey` output: `"ctrl+]"`,
@@ -245,7 +248,11 @@ export class DialogView implements StatefulView<DialogProps> {
 		];
 		// Safety: never exceed terminal rows (covers the availableMiddle === 0 case
 		// where topFixed + bottomFixed > termRows).
-		return result.length > termRows ? result.slice(0, termRows) : result;
+		if (result.length > termRows) return result.slice(0, termRows);
+		// The equalized height (natural + spacer) overflows, but this tab's own body
+		// may be shorter than the window: pad like `renderFitsTerminal` so every tab
+		// renders exactly `termRows` and the dialog height stays stable across tabs.
+		return renderFitsTerminal(result, termRows - result.length);
 	}
 
 	private buildContainerFromStrategy(strategy: TabContentStrategy, headingRowCache: Component[]): Container {

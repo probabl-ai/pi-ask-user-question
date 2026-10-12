@@ -51,7 +51,6 @@
 		"state/selectors/projections.ts",
 		"state/state-reducer.ts",
 		"state/state.ts",
-		"state/transcript-scroll.ts",
 		"tool/format-answer.ts",
 		"tool/normalize-params.ts",
 		"tool/response-envelope.ts",

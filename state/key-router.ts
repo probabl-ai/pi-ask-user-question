@@ -1,4 +1,4 @@
-import { Key, matchesKey } from "@earendil-works/pi-tui";
+import { isKeyRepeat, Key, matchesKey } from "@earendil-works/pi-tui";
 import type { QuestionAnswer } from "../tool/types.js";
 import { ROW_INTENT_META } from "./row-intent.js";
 import type { QuestionnaireRuntime, QuestionnaireState } from "./state.js";
@@ -309,17 +309,13 @@ export function routeKey(data: string, state: QuestionnaireState, runtime: Quest
 
 	// Collapse/expand toggle is a UI-level affordance — intercepted at the top so it
 	// works from every inner state (notes, inputMode, submit tab, multi-select)
-	// without reaching any branch that would otherwise consume the keystroke. The
-	// questionnaire overlay is fully hidden via `OverlayHandle.setHidden(true)` while
-	// collapsed; pi-tui's overlay stack updates accordingly, so overlay-aware consumers
-	// (e.g. `pi-station`) see no visible modal and chat scroll resumes. The toggle key is
-	// also captured at the raw terminal level via `ctx.ui.onTerminalInput` so it still
-	// routes here when the overlay is hidden (pi-tui does not deliver input to a hidden
-	// overlay's `component.handleInput`).
+	// without reaching any branch that would otherwise consume the keystroke. While
+	// collapsed the dialog renders a single hint row in the input dock, so the
+	// transcript above it grows back to (almost) full height.
 	//
 	// The default `ctrl+]` is free in every mainstream macOS terminal (Terminal.app,
 	// iTerm2, Warp), every multiplexer (tmux, zellij, screen — none use it as a prefix),
-	// and the legacy telnet/ssh escape role doesn't apply because our overlay runs
+	// and the legacy telnet/ssh escape role doesn't apply because our dialog runs
 	// in-process. It is, however, awkward on keyboard layouts where `]` is on the
 	// shifted layer (Latin American `es-AR`/`es-MX` require `Ctrl+Shift+}` for `Ctrl+]`)
 	// — use the `collapseKey` config field to override.
@@ -336,7 +332,9 @@ export function routeKey(data: string, state: QuestionnaireState, runtime: Quest
 		runtime.collapseKey !== "off" &&
 		matchesKey(data, runtime.collapseKey as Parameters<typeof matchesKey>[1])
 	) {
-		return { kind: "toggle_collapsed" };
+		// Kitty-protocol terminals report key repeats: a held key must not flicker the
+		// dialog open and closed. (pi-tui already filters releases before handleInput.)
+		return isKeyRepeat(data) ? { kind: "ignore" } : { kind: "toggle_collapsed" };
 	}
 
 	if (state.collapsed) return routeCollapsed(kb, data);

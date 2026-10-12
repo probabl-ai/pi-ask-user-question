@@ -28,7 +28,7 @@ const CR_PARAMS = {
 };
 
 describe("ask_user_question — bare CR in model-supplied text (#192)", () => {
-	it("renders the TUI overlay with normalized question, header, labels, and descriptions", async () => {
+	it("renders the TUI dialog with normalized question, header, labels, and descriptions", async () => {
 		const { tool } = register();
 		let rendered = "";
 		// Mirror `ctx.ui.custom`: run the factory the tool hands us and render the component it returns.

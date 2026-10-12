@@ -1,9 +1,10 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { matchesKey, type TUI } from "@earendil-works/pi-tui";
+import type { TUI } from "@earendil-works/pi-tui";
 import { makeTheme } from "../test/utils/index.js";
 import { describe, expect, it, vi } from "vitest";
 import type { QuestionnaireResult, QuestionParams } from "../tool/types.js";
 import type { WrappingSelectItem } from "../view/components/wrapping-select.js";
+import { dialogRowBudget } from "./build-questionnaire.js";
 import { QuestionnaireSession } from "./questionnaire-session.js";
 
 const DOWN = "\x1b[B";
@@ -14,10 +15,10 @@ const CTRL_G = "\x07";
 const CTRL_U = "\x15";
 const SHIFT_ENTER = "\x1b\r";
 const TAB = "\t";
-const PAGE_UP = "\x1b[5~";
-const PAGE_DOWN = "\x1b[6~";
-const WHEEL_UP = "\x1b[<64;1;1M";
-const WHEEL_DOWN = "\x1b[<65;1;1M";
+const CTRL_RIGHT_BRACKET = "\x1d";
+// Kitty CSI-u for ctrl+] (codepoint 93, modifier 5 = 1 + ctrl) with event types.
+const KITTY_CTRL_RIGHT_BRACKET_PRESS = "\x1b[93;5u";
+const KITTY_CTRL_RIGHT_BRACKET_REPEAT = "\x1b[93;5:2u";
 
 const params: QuestionParams = {
 	questions: [
@@ -64,10 +65,6 @@ const keybindings = {
 				return data === CTRL_U;
 			case "app.editor.external":
 				return data === CTRL_G;
-			case "tui.altScreen.pageUp":
-				return data === PAGE_UP;
-			case "tui.altScreen.pageDown":
-				return data === PAGE_DOWN;
 			default:
 				return false;
 		}
@@ -80,6 +77,7 @@ interface SessionTestOptions {
 	editInput?: (value: string) => Promise<string | undefined>;
 	keybindings?: typeof keybindings;
 	tui?: unknown;
+	collapseKey?: string;
 }
 
 function makeSession(options: SessionTestOptions = {}) {
@@ -93,8 +91,7 @@ function makeSession(options: SessionTestOptions = {}) {
 		done,
 		keybindings: options.keybindings ?? keybindings,
 		editInput: options.editInput ?? (async () => undefined),
-		collapseKey: "off",
-		canReopenWhileHidden: false,
+		collapseKey: options.collapseKey ?? "off",
 	});
 	return { session, done };
 }
@@ -307,113 +304,64 @@ describe("QuestionnaireSession — custom-answer drafts", () => {
 	});
 });
 
-describe("QuestionnaireSession — collapsed row with collapseKey 'off'", () => {
-	it("renders the cancel-only line, never a literal 'Off to expand' (#176)", () => {
-		// The router and raw listener never collapse when off, but
-		// toggleCollapsedExternal() is a public ungated entry — the collapsed row
-		// must not advertise a disabled shortcut if a caller forces it.
-		const { session } = makeSession();
-		session.toggleCollapsedExternal();
+describe("QuestionnaireSession — collapse in the input dock", () => {
+	it("shrinks to a single hint row on the collapse key and expands on the next press", () => {
+		const { session } = makeSession({ collapseKey: "ctrl+]" });
+		const expanded = session.component.render(120);
+		expect(expanded.length).toBeGreaterThan(1);
+
+		session.dispatch(CTRL_RIGHT_BRACKET);
 		const collapsed = session.component.render(120);
 		expect(collapsed).toHaveLength(1);
-		expect(collapsed[0]).toContain("Esc to cancel");
-		expect(collapsed[0]).not.toContain("to expand");
-		expect(collapsed[0]).not.toContain("Off");
+		expect(collapsed[0]).toContain("to expand");
+
+		session.dispatch(CTRL_RIGHT_BRACKET);
+		expect(session.component.render(120)).toEqual(expanded);
+	});
+
+	it("ignores Kitty key repeats so a held collapse key does not flicker", () => {
+		const { session } = makeSession({ collapseKey: "ctrl+]" });
+		session.dispatch(KITTY_CTRL_RIGHT_BRACKET_PRESS);
+		session.dispatch(KITTY_CTRL_RIGHT_BRACKET_REPEAT);
+		expect(session.component.render(120)).toHaveLength(1);
+	});
+
+	it("never collapses when the shortcut is off", () => {
+		const { session } = makeSession();
+		session.dispatch(CTRL_RIGHT_BRACKET);
+		expect(session.component.render(120).length).toBeGreaterThan(1);
 	});
 });
 
-describe("QuestionnaireSession — transcript scrolling behind the dialog", () => {
-	function scrollableTui(options: { rows?: number; viewportHeight?: number } = {}) {
-		const scrollBy = vi.fn();
-		const scrollToTop = vi.fn();
-		const scrollToBottom = vi.fn();
-		const tui: Record<string, unknown> = {
-			terminal: { columns: 120, rows: options.rows ?? 40 },
-			requestRender: vi.fn(),
-			scrollBy,
-			scrollToTop,
-			scrollToBottom,
+describe("QuestionnaireSession — row budget in the input dock", () => {
+	it("caps the dialog at its row budget on a short terminal", () => {
+		const manyOptions: QuestionParams = {
+			questions: [
+				{
+					question: "Which?",
+					header: "Pick",
+					options: Array.from({ length: 12 }, (_, i) => ({ label: `Option ${i}`, description: `desc ${i}` })),
+				},
+			],
 		};
-		if (options.viewportHeight !== undefined) {
-			const viewportHeight = options.viewportHeight;
-			tui.getPrimaryScrollView = () => ({ viewportHeight });
-		}
-		return { tui, scrollBy, scrollToTop, scrollToBottom };
-	}
-
-	/** Real pi-tui key matching for the alt-screen page bindings (Kitty-aware). */
-	const realPageKeybindings = {
-		matches(data: string, name: string): boolean {
-			if (name === "tui.altScreen.pageUp") return matchesKey(data, "pageUp");
-			if (name === "tui.altScreen.pageDown") return matchesKey(data, "pageDown");
-			return false;
-		},
-	};
-
-	it("pages by the transcript viewport height minus the host overlap", () => {
-		// 40-row terminal with a 6-row input dock → 34-row transcript → 30-line page.
-		const { tui, scrollBy } = scrollableTui({ rows: 40, viewportHeight: 34 });
-		const { session } = makeSession({ tui });
-		expect(session.tryScrollTranscript(PAGE_UP)).toBe(true);
-		expect(session.tryScrollTranscript(PAGE_DOWN)).toBe(true);
-		expect(scrollBy).toHaveBeenNthCalledWith(1, -30);
-		expect(scrollBy).toHaveBeenNthCalledWith(2, 30);
-	});
-
-	it("falls back to a dock-aware estimate when the viewport height is unknown", () => {
-		// 40 rows - 8 reserved dock rows - 4 overlap: never jumps past unseen lines.
-		const { tui, scrollBy } = scrollableTui({ rows: 40 });
-		const { session } = makeSession({ tui });
-		expect(session.tryScrollTranscript(PAGE_UP)).toBe(true);
-		expect(scrollBy).toHaveBeenCalledWith(-28);
-	});
-
-	it("scrolls on SGR wheel events without any keybinding match", () => {
-		const { tui, scrollBy } = scrollableTui();
-		const { session } = makeSession({ tui });
-		expect(session.tryScrollTranscript(WHEEL_UP)).toBe(true);
-		expect(session.tryScrollTranscript(WHEEL_DOWN)).toBe(true);
-		expect(scrollBy).toHaveBeenNthCalledWith(1, -3);
-		expect(scrollBy).toHaveBeenNthCalledWith(2, 3);
-	});
-
-	it("leaves ordinary dialog keys to the router", () => {
-		const { tui, scrollBy } = scrollableTui();
-		const { session } = makeSession({ tui });
-		expect(session.tryScrollTranscript(DOWN)).toBe(false);
-		expect(session.tryScrollTranscript(ENTER)).toBe(false);
-		expect(session.tryScrollTranscript("x")).toBe(false);
-		expect(scrollBy).not.toHaveBeenCalled();
-	});
-
-	it("does not consume page keys on a host without a scrollable viewport", () => {
-		// Main-screen hosts keep the dialog's own PgUp/PgDn option-list paging.
-		const { session } = makeSession();
-		expect(session.tryScrollTranscript(PAGE_UP)).toBe(false);
-		expect(session.tryScrollTranscript(WHEEL_UP)).toBe(false);
-	});
-
-	it("scrolls on Kitty press and repeat, and swallows the release without moving", () => {
-		const { tui, scrollBy } = scrollableTui({ viewportHeight: 34 });
-		const { session } = makeSession({ tui, keybindings: realPageKeybindings });
-		expect(session.tryScrollTranscript("\x1b[5;1:1~")).toBe(true); // press
-		expect(session.tryScrollTranscript("\x1b[5;1:2~")).toBe(true); // repeat (held key)
-		expect(session.tryScrollTranscript("\x1b[5;1:3~")).toBe(true); // release
-		expect(scrollBy).toHaveBeenCalledTimes(2);
-		expect(scrollBy).toHaveBeenNthCalledWith(2, -30);
-	});
-
-	it("does not touch questionnaire state while scrolling", () => {
-		const { tui } = scrollableTui({ viewportHeight: 34 });
-		const { session, done } = makeSession({ tui });
-		const before = session.component.render(120).join("\n");
-		session.tryScrollTranscript(PAGE_DOWN);
-		session.tryScrollTranscript(WHEEL_DOWN);
-		expect(session.component.render(120).join("\n")).toBe(before);
-		session.dispatch(ENTER);
-		expect(done).toHaveBeenCalledWith({
-			answers: [expect.objectContaining({ kind: "option", answer: "A" })],
-			cancelled: false,
+		const rows = 20;
+		const { session } = makeSession({
+			params: manyOptions,
+			tui: { terminal: { columns: 120, rows }, requestRender: vi.fn() },
 		});
+		expect(session.component.render(120).length).toBeLessThanOrEqual(dialogRowBudget(rows));
+	});
+
+	it("reserves 8 rows on normal terminals and fewer on small ones", () => {
+		// 4 chrome rows (status + footer) + rows/8 transcript rows, clamped to 1..4.
+		expect(dialogRowBudget(60)).toBe(52);
+		expect(dialogRowBudget(40)).toBe(32);
+		expect(dialogRowBudget(24)).toBe(17);
+		expect(dialogRowBudget(16)).toBe(10);
+		expect(dialogRowBudget(10)).toBe(5);
+	});
+
+	it("never budgets fewer than one row", () => {
+		expect(dialogRowBudget(3)).toBe(1);
 	});
 });

@@ -32,6 +32,32 @@ import {
 } from "./selectors/projections.js";
 import type { QuestionnaireState } from "./state.js";
 
+/**
+ * Rows the dialog leaves to the rest of the screen. The dialog replaces the chat
+ * editor in Pi's input dock, so it shares the terminal with the transcript above it
+ * and the status/footer rows below it. Pi's fullscreen layout clips an over-tall dock
+ * from the bottom, which would cut off the dialog's hint footer, the status line and
+ * the footer, and leave the transcript a single row.
+ *
+ * `DOCK_CHROME_ROWS` covers the status indicator (blank + spinner) and the two-line
+ * footer. On top of that the transcript keeps `rows / 8` rows, clamped to 1..4, so a
+ * normal terminal leaves 8 rows (the dialog still gets 32 of 40) while a small one
+ * does not starve the dialog (16 rows → 10 for the dialog).
+ */
+export const DOCK_CHROME_ROWS = 4;
+export const MAX_TRANSCRIPT_RESERVED_ROWS = 4;
+
+/** Rows reserved outside the dialog for a terminal of `terminalRows` rows. */
+export function dockReservedRows(terminalRows: number): number {
+	const transcript = Math.min(MAX_TRANSCRIPT_RESERVED_ROWS, Math.max(1, Math.floor(terminalRows / 8)));
+	return DOCK_CHROME_ROWS + transcript;
+}
+
+/** Row budget for the dialog given the terminal height; never below one row. */
+export function dialogRowBudget(terminalRows: number): number {
+	return Math.max(1, terminalRows - dockReservedRows(terminalRows));
+}
+
 export interface QuestionnaireBuildConfig {
 	tui: TUI;
 	theme: Theme;
@@ -123,7 +149,7 @@ class QuestionnaireBuilder {
 	private readonly notesInput: Editor;
 	private readonly inlineInput: Editor;
 	private readonly getTerminalWidth = () => this.tui.terminal.columns;
-	private readonly getTerminalRows = () => this.tui.terminal.rows;
+	private readonly getTerminalRows = () => dialogRowBudget(this.tui.terminal.rows);
 
 	constructor(config: QuestionnaireBuildConfig) {
 		this.tui = config.tui;

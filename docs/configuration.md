@@ -60,7 +60,7 @@ type are likewise dropped back to their default without a warning.
 
 | Setting | What it does | Default |
 | --- | --- | --- |
-| `collapseKey` | Key that collapses and expands the dialog overlay. | `"ctrl+]"` |
+| `collapseKey` | Key that collapses and expands the dialog. | `"ctrl+]"` |
 | `maxQuestions` | Maximum questions per `ask_user_question` call. Integer from 1 to 50; flows into the parameter schema (`maxItems`), the built-in prompt snippet/guidelines, and the runtime validator. Any other value falls back to the default. | `12` |
 | `maxOptions` | Maximum authored options per question. Integer from 2 to 50; flows into the per-question schema (`options.maxItems`), the built-in prompt snippet/guidelines, and the runtime validator (`too_many_options`). Any other value falls back to the default. Long lists scroll, so a high cap does not grow the dialog. | `12` |
 | `guidance.description` | Full text of the tool description the model sees. Replaces the built-in default entirely — no merging. | built-in description |
