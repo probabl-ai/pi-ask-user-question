@@ -8,7 +8,7 @@ adapts to the size of your terminal.
 | Key | What it does | Where it applies |
 | --- | --- | --- |
 | `↑` / `↓` | Move between rows. Wraps at both ends. | Option list, Submit picker |
-| `PgUp` / `PgDn` | Scroll the transcript behind the dialog by a full page. Follows `tui.altScreen.pageUp` / `tui.altScreen.pageDown`. | Everywhere in the dialog, on fullscreen hosts |
+| `PgUp` / `PgDn` | Scroll the transcript above the dialog by a full page. Follows `tui.altScreen.pageUp` / `tui.altScreen.pageDown`. | Everywhere in the dialog, on fullscreen hosts |
 | `Enter` | Confirm the focused option, commit typed text, close notes, or activate the focused Submit-picker row. | Everywhere |
 | `Shift+Enter` | Insert a newline. | `Type something.` input, notes editor |
 | `Esc` | Cancel the whole questionnaire. | Everywhere except the notes editor, where it closes notes |
@@ -35,13 +35,15 @@ without leaving the home row.
 `Type something.` (it is an inline text input, so the space character belongs to your
 answer).
 
-## Scrolling the transcript behind the dialog
+## Scrolling the transcript above the dialog
 
-While the dialog is open you keep access to the conversation it covers. `PgUp` / `PgDn`
+The dialog is docked in place of the chat editor, so the transcript keeps the rows above
+it and its last lines are never hidden underneath the dialog. `PgUp` / `PgDn`
 scroll the transcript by a full page, and the mouse wheel scrolls it a few lines per
 notch; the alt-screen bindings (`tui.altScreen.lineUp` / `lineDown` / `halfPageUp` /
-`halfPageDown` / `top` / `bottom`) work too. Arrows still move between the dialog's rows
-and `Enter` / typing keep answering it — only the scroll keys are redirected. This holds
+`halfPageDown` / `top` / `bottom`) work too. Pi handles these keys itself, exactly as it
+does for the chat editor; arrows still move between the dialog's rows and `Enter` /
+typing keep answering it. This holds
 inside the `Type something.` and notes editors as well: there `PgUp` / `PgDn` scroll the
 transcript rather than paging through your draft, while the arrows keep moving the cursor.
 
@@ -92,15 +94,10 @@ keystrokes edit the buffer, so `n` types an `n`. Pasted line breaks are preserve
 
 ## Collapse mode
 
-`Ctrl+]` gets the dialog out of the way: the overlay is marked hidden in Pi's overlay
-stack and shrinks to a single dim hint row, so the transcript it was covering becomes
-readable and chat scrolling resumes. Press the same key to bring the questionnaire back
-with your answers intact. The first time you collapse, Pi notifies you with the key to
-press — that message names your configured key.
-
-Because Pi routes no input to a hidden overlay, the collapse key is additionally captured
-at the raw terminal level. It only acts when the questionnaire is hidden or focused, so a
-different overlay on top of it (for example `/btw`) keeps its keystrokes.
+`Ctrl+]` gets the dialog out of the way: it shrinks to a single dim hint row that names
+the key to press, and the transcript above it takes back the freed rows. Press the same
+key to bring the questionnaire back with your answers intact. The dialog keeps keyboard
+focus while collapsed, and a held key does not toggle it repeatedly.
 
 While collapsed, every keystroke other than cancel is ignored, so you cannot mutate
 answers you cannot see.
@@ -162,7 +159,9 @@ switches to a windowed view instead of clipping at the right edge:
 
 When everything fits, the strip renders exactly as before — no counter, no markers.
 
-When the dialog is taller than the terminal, the body scrolls between a sticky heading and
+When the dialog is taller than its row budget — the terminal height minus the rows left
+for the status line, the footer and a few transcript lines (eight on a 32+-row terminal,
+fewer on smaller ones) — the body scrolls between a sticky heading and
 a sticky footer, and an overflow indicator shows which direction is clipped: `↑` for
 content above, `↓` for content below, `↕` for both.
 

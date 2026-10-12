@@ -163,7 +163,7 @@ export interface MockUI {
 	onTerminalInput: ReturnType<typeof vi.fn>;
 	pasteToEditor: ReturnType<typeof vi.fn>;
 	setEditorComponent: ReturnType<typeof vi.fn>;
-	/** Only present when a test passes one in; overlay renders fall back to the factory theme otherwise. */
+	/** Only present when a test passes one in; dialog renders fall back to the factory theme otherwise. */
 	theme?: Theme | MockTheme;
 }
 
