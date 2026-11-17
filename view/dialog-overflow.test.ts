@@ -332,8 +332,8 @@ describe("Dialog overflow — indicator content", () => {
 	});
 
 	it("shows individual ↑ and ↓ when availableMiddle > 1 with centering", () => {
-		// termRows=14, availableMiddle=5. focusedItemRowRange=[5,8] → focusedRowInMiddle=7,
-		// focusedHeight=3, idealStart=6 → both up and down overflow at scrollStart=6.
+		// termRows=14, availableMiddle=5. focusedItemRowRange=[5,8] → focusedRowInMiddle=5,
+		// focusedHeight=3, idealStart=4 → both up and down overflow at scrollStart=4.
 		const dlg = makeDialog(
 			makeConfig({
 				getTerminalRows: () => 14,
@@ -344,9 +344,11 @@ describe("Dialog overflow — indicator content", () => {
 		);
 		const lines = dlg.render(80);
 		expect(lines.length).toBeLessThanOrEqual(14);
-		// Top of middle region (index 4) is ↑, bottom (index 10 = 4+7-1) is ↓. At termRows=14
-		// with bottomFixed=3 (footerRowCount 4→2), availableMiddle = 14 - 4 - 3 = 7.
-		expect(stripAnsi(lines[4])).toBe("↑");
+		// Sticky band first: rows 4-5 = heading question + its blank row, then the scroll
+		// window rows 6..10 (availableMiddle 7 = 14 - 4 - 3). Scroll starts at 4, so the
+		// window's first and last row carry ↑ and ↓.
+		expect(stripAnsi(lines[4])).toBe("Q1?");
+		expect(stripAnsi(lines[6])).toBe("↑");
 		expect(stripAnsi(lines[10])).toBe("↓");
 		// No combined glyph when there's room for two separate indicators.
 		expect(lines.some((l) => stripAnsi(l) === "↕")).toBe(false);
@@ -417,6 +419,95 @@ describe("Dialog overflow — centering with non-trivial focusedItemRowRange", (
 		);
 		const lines = dlg.render(80);
 		expect(lines.length).toBeLessThanOrEqual(14);
+	});
+});
+
+describe("Dialog overflow — sticky heading keeps the question on screen", () => {
+	const longQ: QuestionData = {
+		question: "Which of the following deployment strategies should we use, given the rollback cost and blast radius?",
+		header: "Deploy",
+		options: [
+			{ label: "A", description: "a" },
+			{ label: "B", description: "b" },
+		],
+	};
+
+	it("keeps the question (and badge) visible when the focused option scrolls far down", () => {
+		// Single-question: topFixed=2, bottomFixed=3, termRows=14 → availableMiddle=9.
+		// Heading (badge + question + spacers) is 5 rows, budget 6 → rendered whole.
+		const dlg = makeDialog(
+			makeConfig({
+				questions: [longQ],
+				isMulti: false,
+				getTerminalRows: () => 14,
+				getBodyHeight: () => 20,
+				getCurrentBodyHeight: () => 20,
+				previewPane: stubPreviewPane(Array(20).fill("<LINE>"), (_w: number) => [18, 20] as [number, number]),
+			}),
+		);
+		const lines = dlg.render(80).map(stripAnsi);
+		expect(lines.length).toBeLessThanOrEqual(14);
+		// The scroll window is at the bottom of the body, but the question stays put.
+		expect(lines).toContain("Deploy");
+		expect(lines.join("\n")).toContain("Which of the following deployment strategies");
+		expect(lines.some((l) => l === "↑")).toBe(true);
+	});
+
+	it("drops the header badge before clipping the question", () => {
+		// Single-question, termRows=10 → availableMiddle=5 → heading budget 2: the badge
+		// and both spacers go before any question row is cut.
+		const dlg = makeDialog(
+			makeConfig({
+				questions: [longQ],
+				isMulti: false,
+				getTerminalRows: () => 10,
+				getBodyHeight: () => 20,
+				getCurrentBodyHeight: () => 20,
+				previewPane: stubPreviewPane(Array(20).fill("<LINE>")),
+			}),
+		);
+		const lines = dlg.render(80).map(stripAnsi);
+		expect(lines.length).toBeLessThanOrEqual(10);
+		expect(lines.join("\n")).toContain("Which of the following deployment strategies");
+		expect(lines.join("\n")).not.toContain("Deploy");
+	});
+
+	it("marks a cut question with an ellipsis and never exceeds the width", () => {
+		// Single-question, termRows=9, width=40 → availableMiddle=4 → heading budget 1:
+		// the question wraps to several rows and only the first survives, truncated.
+		const dlg = makeDialog(
+			makeConfig({
+				questions: [longQ],
+				isMulti: false,
+				getTerminalRows: () => 9,
+				getBodyHeight: () => 20,
+				getCurrentBodyHeight: () => 20,
+				previewPane: stubPreviewPane(Array(20).fill("<LINE>")),
+			}),
+		);
+		const lines = dlg.render(40);
+		expect(lines.length).toBeLessThanOrEqual(9);
+		// Sticky band starts right under the top border + spacer.
+		expect(stripAnsi(lines[2] as string).endsWith("…")).toBe(true);
+		for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(40);
+	});
+
+	it("falls back to scrolling the heading when the terminal cannot fit a sticky band", () => {
+		// availableMiddle = 8 - 2 - 3 = 3 < MIN_STICKY_BODY_ROWS + 1 → legacy whole-middle scroll.
+		const dlg = makeDialog(
+			makeConfig({
+				questions: [longQ],
+				isMulti: false,
+				getTerminalRows: () => 8,
+				getBodyHeight: () => 20,
+				getCurrentBodyHeight: () => 20,
+				previewPane: stubPreviewPane(Array(20).fill("<LINE>")),
+			}),
+		);
+		const lines = dlg.render(80).map(stripAnsi);
+		expect(lines.length).toBeLessThanOrEqual(8);
+		expect(lines[0]).toMatch(/─/);
+		expect(lines.join("\n")).toContain(HINT_PART_CANCEL);
 	});
 });
 

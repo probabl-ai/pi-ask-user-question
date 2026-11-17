@@ -1,5 +1,5 @@
 import { DynamicBorder, type Theme } from "@earendil-works/pi-coding-agent";
-import { type Component, Container, type Editor, Spacer } from "@earendil-works/pi-tui";
+import { type Component, Container, type Editor, Spacer, truncateToWidth } from "@earendil-works/pi-tui";
 import { DEFAULT_COLLAPSE_KEY, formatKeySpecForDisplay } from "../config.js";
 import type { QuestionnaireState } from "../state/state.js";
 import type { QuestionData } from "../tool/types.js";
@@ -7,7 +7,12 @@ import type { PreviewPaneProps } from "./components/preview/preview-pane.js";
 import type { TabBar } from "./components/tab-bar.js";
 import type { StatefulView } from "./stateful-view.js";
 import type { TabComponents } from "./tab-components.js";
-import { QuestionTabStrategy, SubmitTabStrategy, type TabContentStrategy } from "./tab-content-strategy.js";
+import {
+	QuestionTabStrategy,
+	SubmitTabStrategy,
+	type HeadingLines,
+	type TabContentStrategy,
+} from "./tab-content-strategy.js";
 
 export const HINT_PART_ENTER = "Enter to select";
 export const HINT_PART_NAV = "↑/↓ to navigate";
@@ -61,6 +66,13 @@ const OVERFLOW_UP = "↑";
 const OVERFLOW_DOWN = "↓";
 const OVERFLOW_BOTH = "↕";
 
+/**
+ * Scrollable rows a sticky heading always leaves on screen: one option row plus
+ * both overflow indicators. Below this the dialog gives up the sticky band and
+ * scrolls the heading too (see `DialogView.render`).
+ */
+export const MIN_STICKY_BODY_ROWS = 3;
+
 /** No-overflow path: append the residual spacer rows after the footer. */
 function renderFitsTerminal(natural: string[], spacerRows: number): string[] {
 	return spacerRows > 0 ? [...natural, ...Array<string>(spacerRows).fill("")] : natural;
@@ -72,15 +84,28 @@ function renderChromeOnly(natural: string[], topFixed: number, bottomFixed: numb
 	return chromeOnly.length > termRows ? chromeOnly.slice(0, termRows) : chromeOnly;
 }
 
+/**
+ * Shrink the sticky heading to `budget` rows. The badge and the spacers go first;
+ * only when the question statement alone does not fit is its tail cut with `…` — a
+ * clipped question never looks complete.
+ */
+function clipHeading(heading: HeadingLines, budget: number, width: number): string[] {
+	if (heading.lines.length <= budget) return heading.lines;
+	if (heading.keep.length <= budget) return heading.keep;
+	const kept = heading.keep.slice(0, budget);
+	kept[kept.length - 1] = truncateToWidth(kept[kept.length - 1] as string, Math.max(1, width - 1), "…", false);
+	return kept;
+}
+
 /** Scroll window start, centered on the focused option; top-anchored when there is no interactive focus. */
 function computeScrollStart(
 	bodyRange: [number, number] | undefined,
-	headingCount: number,
+	offsetAboveBody: number,
 	availableMiddle: number,
 	middleRows: number,
 ): number {
 	if (!bodyRange) return 0;
-	const focusedRowInMiddle = headingCount + bodyRange[0];
+	const focusedRowInMiddle = offsetAboveBody + bodyRange[0];
 	const focusedHeight = bodyRange[1] - bodyRange[0];
 	// Center the focused item vertically in the available middle space.
 	const idealStart = focusedRowInMiddle - Math.floor(Math.max(0, availableMiddle - focusedHeight) / 2);
@@ -100,6 +125,35 @@ function decorateOverflow(scrollableMiddle: string[], hasUp: boolean, hasDown: b
 	if (hasDown && scrollableMiddle.length > 0) {
 		scrollableMiddle[scrollableMiddle.length - 1] = theme.fg("dim", OVERFLOW_DOWN);
 	}
+}
+
+/**
+ * Slice the scroll window out of the scrollable middle. With room to spare the two
+ * indicators take their own rows (so an arrow never covers the focused option, whose
+ * highlight row usually sits at the window edge on small terminals); a 1-2 row window
+ * keeps the legacy overwrite behaviour, where the combined ↕ handles the collision.
+ */
+function windowMiddle(
+	scrollable: string[],
+	bodyRange: [number, number] | undefined,
+	rows: number,
+	theme: Theme,
+): string[] {
+	if (rows < MIN_STICKY_BODY_ROWS) {
+		const start = computeScrollStart(bodyRange, 0, rows, scrollable.length);
+		const window = scrollable.slice(start, start + rows);
+		decorateOverflow(window, start > 0, start + rows < scrollable.length, theme);
+		return window;
+	}
+	const contentRows = rows - 2;
+	const start = computeScrollStart(bodyRange, 0, contentRows, scrollable.length);
+	const hasUp = start > 0;
+	const hasDown = start + contentRows < scrollable.length;
+	return [
+		hasUp ? theme.fg("dim", OVERFLOW_UP) : "",
+		...scrollable.slice(start, start + contentRows),
+		hasDown ? theme.fg("dim", OVERFLOW_DOWN) : "",
+	];
 }
 
 export type DialogState = QuestionnaireState;
@@ -193,17 +247,17 @@ export class DialogView implements StatefulView<DialogProps> {
 		const onSubmit = this.config.isMulti && state.currentTab === this.config.questions.length;
 		const strategy = onSubmit && this.submitStrategy ? this.submitStrategy : this.questionStrategy;
 
-		// Cache heading rows (avoid double construction in render and container build).
-		const headingRowCache = strategy.headingRows(state);
-		const headingCount = headingRowCache.length;
-
-		// Build container WITHOUT residual spacer — spacer handled below based on overflow.
-		const natural = this.buildContainerFromStrategy(strategy, headingRowCache).render(width);
-
 		// Fixed region sizes (deterministic from structure).
 		// TabBar.render() returns [tabLine, ""] — always 2 rows.
 		const topFixed = 1 + (this.config.isMulti && this.config.tabBar ? 2 : 0) + 1;
 		const bottomFixed = 1 + strategy.footerRowCount;
+
+		// Heading rows are spliced in as text rather than mounted as container children so
+		// the same rows can also serve as the sticky band on a short terminal (below).
+		const heading = strategy.headingLines(width, state);
+		const chrome = this.buildContainerFromStrategy(strategy).render(width);
+		const natural = [...chrome.slice(0, topFixed), ...heading.lines, ...chrome.slice(topFixed)];
+
 		const middleRows = natural.length - topFixed - bottomFixed;
 
 		// Residual spacer: equalizes total height across tabs (only needed when no overflow).
@@ -227,9 +281,35 @@ export class DialogView implements StatefulView<DialogProps> {
 			return renderChromeOnly(natural, topFixed, bottomFixed, termRows);
 		}
 
+		// STICKY HEADING — the question keeps `availableMiddle - MIN_STICKY_BODY_ROWS`
+		// rows while the option list scrolls under it, so the user never loses the
+		// question they are answering. A terminal too short even for that falls back to
+		// scrolling the whole middle, heading included.
+		const headingBudget = availableMiddle - MIN_STICKY_BODY_ROWS;
+		if (headingBudget >= 1) {
+			const band = clipHeading(heading, headingBudget, width);
+			const scrollable = natural.slice(topFixed + heading.lines.length, natural.length - bottomFixed);
+			const windowRows = Math.min(availableMiddle - band.length, scrollable.length);
+			const scrollWindow = windowMiddle(
+				scrollable,
+				strategy.focusedItemRowRange(width, state),
+				windowRows,
+				this.config.theme,
+			);
+			const result = [
+				...natural.slice(0, topFixed),
+				...band,
+				...scrollWindow,
+				...natural.slice(natural.length - bottomFixed),
+			];
+			if (result.length > termRows) return result.slice(0, termRows);
+			return renderFitsTerminal(result, termRows - result.length);
+		}
+
+		// FALLBACK — no room for a sticky heading: scroll the whole middle, heading included.
 		const scrollStart = computeScrollStart(
 			strategy.focusedItemRowRange(width, state),
-			headingCount,
+			heading.lines.length,
 			availableMiddle,
 			middleRows,
 		);
@@ -255,7 +335,7 @@ export class DialogView implements StatefulView<DialogProps> {
 		return renderFitsTerminal(result, termRows - result.length);
 	}
 
-	private buildContainerFromStrategy(strategy: TabContentStrategy, headingRowCache: Component[]): Container {
+	private buildContainerFromStrategy(strategy: TabContentStrategy): Container {
 		const { theme, isMulti, tabBar } = this.config;
 		const state = this.liveProps.state;
 		const container = new Container();
@@ -265,7 +345,6 @@ export class DialogView implements StatefulView<DialogProps> {
 		if (isMulti && tabBar) container.addChild(tabBar);
 		container.addChild(new Spacer(1));
 
-		for (const c of headingRowCache) container.addChild(c);
 		container.addChild(strategy.bodyComponent(state));
 		container.addChild(new Spacer(1));
 		for (const c of strategy.midRows(state)) container.addChild(c);
