@@ -165,6 +165,13 @@ fewer on smaller ones) — the body scrolls between a sticky heading and
 a sticky footer, and an overflow indicator shows which direction is clipped: `↑` for
 content above, `↓` for content below, `↕` for both.
 
+The heading — the question you are answering — is pinned: it takes the middle rows the
+body does not need, keeping at least one option row plus the two indicators scrollable.
+When the whole heading does not fit in that budget, the header badge and the spacers
+around the question go first, and only a still-too-long question is truncated with `…`.
+Below four middle rows there is no room for a band at all, so the dialog scrolls the
+middle as a whole — heading included — keeping the focused option reachable.
+
 The footer hint line adapts to context — it drops the notes hint and appends the
 `Shift+Enter` newline hint whenever a text editor has the keyboard, with `Ctrl+U` still at
 the far right for custom answers. It adds the tab hint only in multi-question dialogs. The

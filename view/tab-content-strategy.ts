@@ -56,6 +56,16 @@ class OneLineClippedText implements Component {
 }
 
 /**
+ * Heading rows above the body. `keep` is the minimum that must stay visible — the
+ * question statement, without the optional header badge and decorative spacers — and
+ * the only rows a short terminal clips (with `…`).
+ */
+export interface HeadingLines {
+	lines: string[];
+	keep: string[];
+}
+
+/**
  * Per-tab content provider. Pure functional — closes over construction-time
  * config; per-tick state threads through method args. The chrome wrapper
  * enforces height equality across tabs via `bodyHeight + footerRowCount`.
@@ -64,8 +74,12 @@ export interface TabContentStrategy {
 	/** Total RENDERED footer rows — MUST equal what `footerRows()` actually emits. Drives residual math. */
 	readonly footerRowCount: number;
 
-	/** Variable rows above the body, after top chrome (border + tabBar + Spacer). */
-	headingRows(state: DialogState): Component[];
+	/**
+	 * Variable rows above the body, after top chrome (border + tabBar + Spacer).
+	 * Returned as text (not Components) because `DialogView` splices the same rows
+	 * into the container AND reuses them as the sticky band on short terminals.
+	 */
+	headingLines(width: number, state: DialogState): HeadingLines;
 
 	/** Body Component placed at the body slot. */
 	bodyComponent(state: DialogState): Component;
@@ -101,19 +115,16 @@ export class QuestionTabStrategy implements TabContentStrategy {
 
 	constructor(private readonly config: QuestionTabStrategyConfig) {}
 
-	headingRows(state: DialogState): Component[] {
-		const out: Component[] = [];
+	headingLines(width: number, state: DialogState): HeadingLines {
 		const question = this.config.questions[state.currentTab];
+		const keep = question ? new Text(this.config.theme.bold(question.question), 1, 0).render(width) : [];
+		const lines: string[] = [];
 		// In multi-question mode the tab bar already shows the header; suppress the inline badge.
 		if (!this.config.isMulti && question?.header && question.header.length > 0) {
-			out.push(new Text(this.config.theme.bg("selectedBg", ` ${question.header} `), 1, 0));
-			out.push(new Spacer(1));
+			lines.push(...new Text(this.config.theme.bg("selectedBg", ` ${question.header} `), 1, 0).render(width), "");
 		}
-		if (question) {
-			out.push(new Text(this.config.theme.bold(question.question), 1, 0));
-			out.push(new Spacer(1));
-		}
-		return out;
+		lines.push(...keep, "");
+		return { lines, keep };
 	}
 
 	bodyComponent(state: DialogState): Component {
@@ -173,11 +184,13 @@ export class SubmitTabStrategy implements TabContentStrategy {
 
 	constructor(private readonly config: SubmitTabStrategyConfig) {}
 
-	headingRows(_state: DialogState): Component[] {
-		return [
-			new Text(this.config.theme.bold(this.config.theme.fg("accent", t("review.heading", REVIEW_HEADING))), 1, 0),
-			new Spacer(1),
-		];
+	headingLines(width: number, _state: DialogState): HeadingLines {
+		const heading = new Text(
+			this.config.theme.bold(this.config.theme.fg("accent", t("review.heading", REVIEW_HEADING))),
+			1,
+			0,
+		).render(width);
+		return { lines: [...heading, ""], keep: heading };
 	}
 
 	bodyComponent(state: DialogState): Component {
